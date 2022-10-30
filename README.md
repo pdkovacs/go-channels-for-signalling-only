@@ -5,7 +5,7 @@
 Test it with something like
 
 ```
-    i=0; while go clean -testcache && go test -v -timeout 10s ./... ; do echo $((i++)); done
+    i=0; while go clean -testcache && go test -v ./... ; do echo $((i++)); done
 ```
 
 . Stop with Ctrl+C whenever you feel confident enough about the number of PASSes.

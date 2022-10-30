@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
+	"os"
 	"runtime"
 	"sync/atomic"
 	"testing"
@@ -15,12 +16,20 @@ import (
 func doSomethingWithProlog(prolog func()) doSomethingFunc {
 	return func(input string) string {
 		prolog()
-		return fmt.Sprintf("%s_%s", input, input)
+		return doSomething(input)
 	}
 }
 
 func doSomething(input string) string {
 	return fmt.Sprintf("%s_%s", input, input)
+}
+
+func mapToExpectedOutputs(inputs []string) []string {
+	expectedOutputs := make([]string, len(inputs))
+	for index, input := range inputs {
+		expectedOutputs[index] = doSomething(input)
+	}
+	return expectedOutputs
 }
 
 const charset = "abcdefghijklmnopqrstuvwxyz" +
@@ -52,37 +61,35 @@ func generateRandomInputs(count int) []string {
 	return result
 }
 
+var workerCounts []int = []int{1, runtime.NumCPU(), 1000}
+
 type stringSliceToStringSliceTestSuite struct {
 	suite.Suite
-	t      *testing.T
-	inputs []string
+	t           *testing.T
+	workerCount int
 }
 
 func TestStringSliceToStringSliceTestSuite(t *testing.T) {
-	suite.Run(t, &stringSliceToStringSliceTestSuite{t: t})
+	for index, workerCount := range workerCounts {
+		fmt.Fprintf(os.Stderr, "#%02d workerCount: %d\n", index, workerCount)
+		suite.Run(t, &stringSliceToStringSliceTestSuite{t: t, workerCount: workerCount})
+	}
 }
 
 func (s *stringSliceToStringSliceTestSuite) TestWithOneInput() {
 	origGoroutineCount := runtime.NumGoroutine()
-
-	s.inputs = []string{"kalap"}
-	outputs := process(context.Background(), doSomething, 1, s.inputs)
-	s.myAssert(outputs)
-	waitForGoroutineNum(origGoroutineCount)
-	outputs = process(context.Background(), doSomething, 1000, s.inputs)
-	s.myAssert(outputs)
+	inputs := []string{"kalap"}
+	outputs := process(context.Background(), doSomething, s.workerCount, inputs)
+	s.Equal(mapToExpectedOutputs(inputs), outputs)
 	waitForGoroutineNum(origGoroutineCount)
 }
 
 func (s *stringSliceToStringSliceTestSuite) TestWithManyInput() {
 	origGoroutineCount := runtime.NumGoroutine()
 
-	s.inputs = generateRandomInputs(1000000)
-	outputs := process(context.Background(), doSomething, 1, s.inputs)
-	s.myAssert(outputs)
-	waitForGoroutineNum(origGoroutineCount)
-	outputs = process(context.Background(), doSomething, 1000, s.inputs)
-	s.myAssert(outputs)
+	inputs := generateRandomInputs(1000000)
+	outputs := process(context.Background(), doSomething, s.workerCount, inputs)
+	s.Equal(mapToExpectedOutputs(inputs), outputs)
 	waitForGoroutineNum(origGoroutineCount)
 }
 
@@ -92,7 +99,7 @@ func (s *stringSliceToStringSliceTestSuite) TestWithDeadline() {
 	inputCount := 10
 	cancelAfterProcessed := 5
 
-	s.inputs = generateRandomInputs(inputCount)
+	inputs := generateRandomInputs(inputCount)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	processedCount := atomic.Int64{}
@@ -106,7 +113,7 @@ func (s *stringSliceToStringSliceTestSuite) TestWithDeadline() {
 		}
 	}
 
-	outputs := process(ctx, doSomethingWithProlog(prolog), 1, s.inputs)
+	outputs := process(ctx, doSomethingWithProlog(prolog), s.workerCount, inputs)
 	s.Nil(outputs)
 	waitForGoroutineNum(origGoroutineCount)
 }
@@ -117,7 +124,7 @@ func (s *stringSliceToStringSliceTestSuite) TestWithNoDeadline() {
 	inputCount := 10
 	cancelAfterProcessed := 5
 
-	s.inputs = generateRandomInputs(inputCount)
+	inputs := generateRandomInputs(inputCount)
 	ctx := context.Background()
 
 	processedCount := atomic.Int64{}
@@ -128,8 +135,8 @@ func (s *stringSliceToStringSliceTestSuite) TestWithNoDeadline() {
 		}
 	}
 
-	outputs := process(ctx, doSomethingWithProlog(prolog), 1, s.inputs)
-	s.myAssert(outputs)
+	outputs := process(ctx, doSomethingWithProlog(prolog), s.workerCount, inputs)
+	s.Equal(mapToExpectedOutputs(inputs), outputs)
 	s.Equal(int64(inputCount), processedCount.Load())
 	waitForGoroutineNum(origGoroutineCount)
 }
@@ -140,7 +147,7 @@ func (s *stringSliceToStringSliceTestSuite) TestWithDeadlineAfterMany() {
 	inputCount := 1_000_000
 	cancelAfterProcessed := 900_000
 
-	s.inputs = generateRandomInputs(inputCount)
+	inputs := generateRandomInputs(inputCount)
 	ctx, cancel := context.WithCancel(context.Background())
 
 	processedCount := atomic.Int64{}
@@ -154,16 +161,10 @@ func (s *stringSliceToStringSliceTestSuite) TestWithDeadlineAfterMany() {
 		}
 	}
 
-	outputs := process(ctx, doSomethingWithProlog(prolog), 1000, s.inputs)
+	outputs := process(ctx, doSomethingWithProlog(prolog), s.workerCount, inputs)
 	s.Nil(outputs)
 	time.Sleep(5 * time.Second)
 	waitForGoroutineNum(origGoroutineCount)
-}
-
-func (s *stringSliceToStringSliceTestSuite) myAssert(result []string) {
-	for index, inp := range s.inputs {
-		s.Equal(fmt.Sprintf("%s_%s", inp, inp), result[index])
-	}
 }
 
 // Checking runtime.NumGoroutine() is probably an overkill, because this is
