@@ -11,17 +11,18 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/suite"
+	"golang.org/x/exp/constraints"
 )
+
+func doSomething(input string) string {
+	return fmt.Sprintf("%s_%s", input, input)
+}
 
 func doSomethingWithProlog(prolog func()) doSomethingFunc {
 	return func(input string) string {
 		prolog()
 		return doSomething(input)
 	}
-}
-
-func doSomething(input string) string {
-	return fmt.Sprintf("%s_%s", input, input)
 }
 
 func mapToExpectedOutputs(inputs []string) []string {
@@ -48,9 +49,9 @@ func generateRandomString(length int) string {
 	return string(b)
 }
 
-func generateRandomInputs(count int) []string {
+func generateRandomInputs(count int64) []string {
 	result := make([]string, count)
-	for cursor := 0; cursor < count; cursor++ {
+	for cursor := int64(0); cursor < count; cursor++ {
 		for {
 			if length := seededRand.Intn(maxInputLength); length > 0 {
 				result[cursor] = generateRandomString(length)
@@ -96,8 +97,8 @@ func (s *stringSliceToStringSliceTestSuite) TestWithManyInput() {
 func (s *stringSliceToStringSliceTestSuite) TestWithDeadline() {
 	origGoroutineCount := runtime.NumGoroutine()
 
-	inputCount := 10
-	cancelAfterProcessed := 5
+	inputCount := int64(100)
+	cancelAfterProcessed := int64(70)
 
 	inputs := generateRandomInputs(inputCount)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -115,14 +116,17 @@ func (s *stringSliceToStringSliceTestSuite) TestWithDeadline() {
 
 	outputs := process(ctx, doSomethingWithProlog(prolog), s.workerCount, inputs)
 	s.Nil(outputs)
+	if s.workerCount <= runtime.NumCPU() {
+		s.Less(processedCount.Load(), Min(cancelAfterProcessed+int64(runtime.NumCPU()), inputCount-2))
+	}
 	waitForGoroutineNum(origGoroutineCount)
 }
 
 func (s *stringSliceToStringSliceTestSuite) TestWithNoDeadline() {
 	origGoroutineCount := runtime.NumGoroutine()
 
-	inputCount := 10
-	cancelAfterProcessed := 5
+	inputCount := int64(100)
+	cancelAfterProcessed := int64(70)
 
 	inputs := generateRandomInputs(inputCount)
 	ctx := context.Background()
@@ -144,8 +148,8 @@ func (s *stringSliceToStringSliceTestSuite) TestWithNoDeadline() {
 func (s *stringSliceToStringSliceTestSuite) TestWithDeadlineAfterMany() {
 	origGoroutineCount := runtime.NumGoroutine()
 
-	inputCount := 1_000_000
-	cancelAfterProcessed := 900_000
+	inputCount := int64(1_000_000)
+	cancelAfterProcessed := int64(900_000)
 
 	inputs := generateRandomInputs(inputCount)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -163,7 +167,9 @@ func (s *stringSliceToStringSliceTestSuite) TestWithDeadlineAfterMany() {
 
 	outputs := process(ctx, doSomethingWithProlog(prolog), s.workerCount, inputs)
 	s.Nil(outputs)
-	time.Sleep(5 * time.Second)
+	if s.workerCount <= runtime.NumCPU() {
+		s.Less(processedCount.Load(), Min(cancelAfterProcessed+int64(runtime.NumCPU()), inputCount-2))
+	}
 	waitForGoroutineNum(origGoroutineCount)
 }
 
@@ -185,4 +191,11 @@ func waitForGoroutineNum(expectedNum int) error {
 	}
 
 	return fmt.Errorf("timeout waiting for %d to become %d", actualNum, expectedNum)
+}
+
+func Min[O constraints.Ordered](a, b O) O {
+	if a < b {
+		return a
+	}
+	return b
 }
